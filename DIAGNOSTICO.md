@@ -136,20 +136,20 @@ usa la propia tienda de Steam:
   `original_price_in_cents`, `discount_pct` y `formatted_final_price`.
 - Con `--mode single` queda el `appdetails` clásico como respaldo.
 
-Uso:
+Uso (con el entorno virtual instalado en la sección 7):
 
 ```powershell
 # Catálogo indie completo (~19.600 juegos) en menos de 1 minuto
-py -3.12 steam_precios.py --only-indie
+.\.venv\Scripts\python.exe steam_precios.py --only-indie
 
 # Muestra / pruebas
-py -3.12 steam_precios.py --only-indie --limit 500
+.\.venv\Scripts\python.exe steam_precios.py --only-indie --limit 500
 
 # Juegos concretos, precios en USD
-py -3.12 steam_precios.py --appids 10,570,730 --cc us
+.\.venv\Scripts\python.exe steam_precios.py --appids 10,570,730 --cc us
 
 # Respaldo con el endpoint público (1 appid por petición, más lento)
-py -3.12 steam_precios.py --only-indie --mode single
+.\.venv\Scripts\python.exe steam_precios.py --only-indie --mode single
 
 # Si se corta, se vuelve a lanzar el mismo comando y continúa donde quedó
 # (--force borra el archivo y descarga todo de nuevo)
@@ -211,12 +211,84 @@ descuento).
 1. Usar `steam_precios.py` y commitearlo. El CSV de salida ya está en
    `.gitignore`, pero como se commiteó antes sigue trackeado; si no quieren
    versionarlo: `git rm --cached steam_precios_reales.csv`.
-2. Ejecutar siempre con `py -3.12` (o cambiar el intérprete de VS Code a 3.12).
+2. Ejecutar siempre con el entorno virtual (`.venv`, Python 3.12); el `python`
+   del sistema es 3.14 y no tiene PySpark.
 3. No usar `GetAppList`; para precios usar el endpoint en lote o `appdetails`.
 4. Documentar en el notebook que `final` está en centavos y que la moneda es
    CRC (si se usa `--cc cr`).
 5. Si se quiere aligerar el repo, sacar los CSV del historial con
    `git filter-repo` (coordinar con el equipo).
-6. Añadir `requirements.txt` con `pyspark==4.2.0`, `pandas==2.3.0`.
+6. Reinstalar dependencias con `requirements.txt` dentro del venv.
 7. Completar el notebook con el pipeline: catálogo → filtro indie → precios
    reales → engagement del 200k → unión por nombre normalizado.
+
+## 7. Entorno instalado y bloqueo de red actual (2026-11-12)
+
+### Entorno virtual
+
+Se creó `.venv` con **Python 3.12.1** en la raíz del proyecto y se instalaron:
+
+| Paquete | Versión |
+|---|---|
+| pyspark | 4.2.0 |
+| pandas | 2.3.0 |
+| ipykernel | 7.4.0 |
+| numpy, py4j, etc. | dependencias |
+
+Verificado:
+
+```
+.\.venv\Scripts\python.exe test_spark.py     -> funciona
+.\.venv\Scripts\python.exe steam_precios.py  -> funciona (sujeto a la red)
+```
+
+VS Code quedó configurado para usar `.venv\Scripts\python.exe` y se registró
+el kernel de Jupyter **"Python 3.12 (Steam Indie)"**.
+
+Para activarlo en PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python test_spark.py
+```
+
+Para reinstalarlo desde cero en otra máquina:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Java 21 ya estaba instalado (requisito de PySpark).
+
+### La red actual bloquea Steam
+
+El 2026-11-12 la red empezó a devolver **HTTP 403** en todos los dominios de
+Steam. El cuerpo de la respuesta es una página del firewall:
+
+```
+<title>Application Control Violation</title>
+<h1>FortiGate Application Control</h1>
+<h3>Application Blocked</h3>
+<p>You have attempted to use an application that violates your Internet usage policy.</p>
+```
+
+Evidencia:
+
+| Destino | Resultado |
+|---|---|
+| `store.steampowered.com` (con `curl -k`) | 403 FortiGate |
+| `api.steampowered.com` | 403 FortiGate |
+| `steamcommunity.com` | 403 FortiGate |
+| `example.com`, `httpbin.org` | 200 OK |
+| Python 3.12/3.14 sin `-k` | `SSL: CERTIFICATE_VERIFY_FAILED` (FortiGate intercepta TLS) |
+
+No es una caída de Steam ni un problema del script: es una política de la red
+(campus/ISP). `steam_precios.py` ahora detecta los 403 de FortiGate y los
+errores de certificado, e imprime un aviso claro en vez de marcar los juegos
+como "no encontrados".
+
+**Consecuencia**: los precios no se pueden actualizar desde esta red. El
+archivo `steam_precios_reales.csv` ya tiene los **19.582 juegos descargados el
+11-11**, así que el análisis puede continuar sin conexión. Para regenerarlo o
+actualizarlo, ejecutar el script desde un hotspot móvil, otra red sin ese
+bloqueo o un VPN permitido por la institución.

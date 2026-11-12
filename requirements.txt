@@ -1,3 +1,4 @@
-# Ejecutar con Python 3.12 (pyspark aun no soporta 3.14 en esta maquina)
+# Python 3.12 (pyspark 4.2 no soporta 3.14 en esta maquina)
 pyspark==4.2.0
 pandas==2.3.0
+ipykernel==7.4.0

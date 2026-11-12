@@ -59,6 +59,16 @@ MIN_INTERVAL = 0.25  # segundos entre peticiones, en total
 # Motivos de error, para diagnostico al final.
 REASONS: dict[str, int] = {}
 _reasons_lock = threading.Lock()
+_hint_lock = threading.Lock()
+_hints_shown: set[str] = set()
+
+
+def hint_once(key: str, message: str) -> None:
+    with _hint_lock:
+        if key in _hints_shown:
+            return
+        _hints_shown.add(key)
+    print(f"\n  AVISO: {message}\n")
 
 
 def configure_stdout() -> None:
@@ -106,7 +116,11 @@ def http_get(url: str, timeout: int) -> tuple[int, bytes, float]:
             retry_after = float(exc.headers.get("Retry-After") or 0)
         except (TypeError, ValueError):
             retry_after = 0.0
-        return exc.code, b"", retry_after
+        try:
+            body = exc.read(4096)
+        except Exception:
+            body = b""
+        return exc.code, body, retry_after
 
 
 def get_json(url: str, timeout: int, retries: int,
@@ -127,11 +141,30 @@ def get_json(url: str, timeout: int, retries: int,
                 note_reason(f"http_{status}")
                 return None
             if status != 200:
-                note_reason(f"http_{status}")
+                low = raw.lower()
+                if status == 403 and (b"application control" in low or b"fortinet" in low):
+                    note_reason("red_bloquea_steam")
+                    hint_once(
+                        "red_bloquea_steam",
+                        "la red esta bloqueando Steam con un firewall FortiGate "
+                        "(Application Control). No es un problema del script: usa "
+                        "otra red/hotspot o pide habilitar store.steampowered.com "
+                        "y api.steampowered.com.")
+                else:
+                    note_reason(f"http_{status}")
                 return None
             return json.loads(raw)
         except (urllib.error.URLError, TimeoutError, ConnectionError,
                 json.JSONDecodeError, OSError) as exc:
+            text = str(exc)
+            if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
+                note_reason("ssl_certificado")
+                hint_once(
+                    "ssl_certificado",
+                    "Python no confia en el certificado del servidor. Suele pasar "
+                    "cuando un proxy/firewall intercepta HTTPS: usa otra red o "
+                    "instala el certificado del proxy.")
+                return None
             if attempt < retries:
                 time.sleep(delay + random.uniform(0, 0.5))
                 delay = min(delay * 2, 30)
@@ -186,6 +219,10 @@ def bulk_fetch(batch: list[tuple[int, str]], cc: str, lang: str,
     }
     url = BULK_URL + "?input_json=" + urllib.parse.quote(json.dumps(payload))
     data = get_json(url, timeout, retries, cooldown)
+    if data is None:
+        # Fallo de red/servidor: marcar como error (no como "no encontrado")
+        # para que la proxima ejecucion lo reintente.
+        return [empty_row(appid, name, "error") for appid, name in batch]
 
     rows: dict[int, dict] = {}
     if data:
@@ -468,6 +505,12 @@ def main() -> int:
     print(f"Listo en {(time.time() - t0) / 60:.1f} min. Resultados: {stats}")
     if REASONS:
         print(f"Errores por causa: {REASONS}")
+    if "red_bloquea_steam" in REASONS:
+        print("La red actual bloquea Steam: el CSV no se pudo actualizar. "
+              "Prueba desde otra red (hotspot) o usa el CSV ya descargado.")
+    elif "ssl_certificado" in REASONS:
+        print("Hubo un problema de certificado SSL (proxy/firewall). "
+              "Prueba desde otra red o instala el certificado del proxy.")
     print(f"Archivo: {os.path.abspath(args.output)}")
     return 0
 
